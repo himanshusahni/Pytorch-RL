@@ -203,7 +203,7 @@ class A2C():
     def save(self, path):
         torch.save({'V':self.V, 'pi':self.pi}, path)
 
-    def update(self, exp, final_states, step=True, metrics=None, scope=''):
+    def update(self, exp, final_states, step=True, metrics=None, old_logits=None, scope=''):
         states = exp[0]
         actions = exp[1]
         rewards = exp[2]
@@ -233,6 +233,26 @@ class A2C():
         # redo some forward pass on policy to get loss
         logits = self.pi(states)
         logprobs = self.policy.logprobs(logits, actions.view(batchsize * steps, -1))
+
+        # importance sampling
+        if old_logits is not None:
+            new_logprobs = logprobs.view(batchsize, steps).detach()
+            cum_logprobs = torch.zeros(batchsize, steps).to(self.device)
+            cum_logprobs[:, steps-1] = new_logprobs[:, steps-1]
+            for j in reversed(range(steps-1)):
+                cum_logprobs[:, j] = (1 - dones[:, j]) * cum_logprobs[:, j+1] + new_logprobs[:, j]
+            old_logits = old_logits.reshape(batchsize * steps, *old_logits.size()[2:])
+            old_logprobs = self.policy.logprobs(old_logits, actions.view(batchsize * steps, -1))
+            old_logprobs = old_logprobs.view(batchsize, steps).detach()
+            cum_oldlogprobs = torch.zeros(batchsize, steps).to(self.device)
+            cum_oldlogprobs[:, steps-1] = old_logprobs[:, steps-1]
+            for j in reversed(range(steps-1)):
+                cum_oldlogprobs[:, j] = (1 - dones[:, j]) * cum_oldlogprobs[:, j+1] + old_logprobs[:, j]
+            # clamp to avoid problems
+            ratios = torch.clamp(cum_logprobs - cum_oldlogprobs, min=-3, max=3).exp()
+            ratios = ratios.view(batchsize * steps)
+            adv = adv * ratios
+            metrics[scope+'/IS_ratio'].update(ratios.mean().item())
 
         # policy and value losses
         policy_loss = -(logprobs * adv.detach()).mean()
