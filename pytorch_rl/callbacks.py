@@ -42,14 +42,15 @@ class PrintCallback(Callback):
 
 
 class SaveNetworks(Callback):
-    def __init__(self, save_dir, freq, networks):
+    def __init__(self, save_dir, freq, network_func):
         self.save_dir = save_dir
         self.freq = freq
-        self.networks = networks
+        self.networks = network_func
 
     def on_step_end(self, step, step_log):
         if step % self.freq == 0:
-            for name, net in self.networks.items():
+            nets = self.networks()
+            for name, net in nets.items():
                 path = os.path.join(self.save_dir, name+'_{}.pth'.format(step))
                 print("saving {} network to {} path".format(name, path))
                 torch.save(net, path)
